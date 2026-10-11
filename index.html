@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MD 编辑器</title>
+    <script>
+      // 主题必须在首帧之前定下来，否则会「先闪一下深色再变浅色」。
+      // localStorage 只服务于这个时机；真正的配置存在 config.json 里。
+      try {
+        var t = localStorage.getItem('md-theme')
+        if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t)
+      } catch (e) {}
+    </script>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

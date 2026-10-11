@@ -1,0 +1,21 @@
+# 依赖与构建产物
+node_modules/
+dist/
+
+# 打包产物（只发布 exe，不把中间目录提交进仓库）
+# release/ 是正式输出目录；release2、release-out19、release-build 之类是打包时的临时目录
+release*/
+*.nsis.7z
+*.blockmap
+
+# 诊断脚本产出的截图（每次跑 diag 都会变，不要进版本库）
+scripts/_shot*.png
+scripts/shot-*.png
+scripts/__diag_cover.png
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.log

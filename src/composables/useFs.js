@@ -1,0 +1,36 @@
+// 对 window.md（preload 暴露的安全文件 API）的一层薄封装
+export function useFs() {
+  return {
+    openFolder: () => window.md.openFolder(),
+    readTree: (dir) => window.md.readTree(dir),
+    listFiles: (dir) => window.md.listFiles(dir),
+    scanNotes: (dir, selfPath) => window.md.scanNotes(dir, selfPath),
+    readFile: (p) => window.md.readFile(p),
+    writeFile: (p, content) => window.md.writeFile(p, content),
+    createDir: (dir, name) => window.md.createDir(dir, name),
+    createDoc: (dir, name) => window.md.createDoc(dir, name),
+    createNavDoc: (dir, name) => window.md.createNavDoc(dir, name),
+    saveAttachment: (arg) => window.md.saveAttachment(arg),
+    archiveNote: (filePath, root) => window.md.archiveNote(filePath, root),
+    deleteNote: (filePath, root) => window.md.deleteNote(filePath, root),
+    listRecycle: (root) => window.md.listRecycle(root),
+    restoreNote: (root, id) => window.md.restoreNote(root, id),
+    purgeNote: (root, id) => window.md.purgeNote(root, id),
+    emptyRecycle: (root) => window.md.emptyRecycle(root),
+    copyText: (text) => window.md.copyText(text),
+    exportPdf: (arg) => window.md.exportPdf(arg),
+    readImage: (p) => window.md.readImage(p),
+    getConfig: () => window.md.getConfig(),
+    getDefaults: () => window.md.getDefaults(),
+    setConfig: (cfg) => window.md.setConfig(cfg),
+    flushConfig: (cfg) => window.md.flushConfig(cfg),
+    logDebug: (msg) => window.md.logDebug(msg),
+    getAppInfo: () => window.md.getAppInfo(),
+    checkUpdate: () => window.md.checkUpdate(),
+    openExternal: (url) => window.md.openExternal(url),
+    watchDir: (dir) => window.md.watchDir(dir),
+    unwatchDir: () => window.md.unwatchDir(),
+    onDirChanged: (cb) => window.md.onDirChanged(cb),
+    onMenu: (cb) => window.md.onMenu(cb)
+  }
+}
