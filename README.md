@@ -33,7 +33,7 @@
 ## 开发
 
 ```bash
-git clone https://github.com/YOUR_NAME/md-editor.git   # ← 替换成你的仓库地址
+git clone https://github.com/deepdfhy/md-editor.git
 cd md-editor
 npm install
 npm run dev:all     # vite + electron 一起起来，改代码热更新
