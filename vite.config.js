@@ -11,6 +11,8 @@ export default defineConfig({
   },
   build: {
     outDir: 'dist',
-    emptyOutDir: false
+    // 必须清空：否则历次构建的旧 js/css 会一直堆在 dist/assets 里被一起打进 app.asar
+    // （实测会让安装包从 83MB 胖到 102MB）
+    emptyOutDir: true
   }
 })
