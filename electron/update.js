@@ -44,9 +44,11 @@ function compareVersion(a, b) {
 function defaultFetch(url, timeout) {
   return new Promise((resolve, reject) => {
     let done = false
+    let timer = null
     const finish = (fn, arg) => {
       if (done) return
       done = true
+      if (timer) clearTimeout(timer)
       fn(arg)
     }
     try {
@@ -61,12 +63,15 @@ function defaultFetch(url, timeout) {
         res.on('error', (e) => finish(reject, e))
       })
       req.on('error', (e) => finish(reject, e))
-      req.setTimeout(timeout || DEFAULT_TIMEOUT, () => {
+      // 注意：Electron 的 ClientRequest **没有** setTimeout（那是 Node http 的 API），
+      // 调它会直接抛 "req.setTimeout is not a function"。所以自己开定时器，到点 abort。
+      const ms = timeout || DEFAULT_TIMEOUT
+      timer = setTimeout(() => {
         try {
           req.abort()
         } catch (_) {}
-        finish(reject, new Error('请求超时'))
-      })
+        finish(reject, new Error('请求超时（' + ms + 'ms）'))
+      }, ms)
       req.end()
     } catch (e) {
       finish(reject, e)

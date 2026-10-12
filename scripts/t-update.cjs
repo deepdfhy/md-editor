@@ -2,7 +2,8 @@
 // 跑法：node scripts/t-update.cjs
 const assert = require('assert')
 const path = require('path')
-const { parseRepo, parseVersion, compareVersion, fetchLatest, checkUpdate } = require(
+const Module = require('module')
+const { parseRepo, parseVersion, compareVersion, fetchLatest, checkUpdate, defaultFetch } = require(
   path.join(__dirname, '..', 'electron', 'update.js')
 )
 
@@ -146,6 +147,146 @@ console.log('\n[fetchLatest]')
     assert.strictEqual(r.ok, false)
     assert.strictEqual(r.hasUpdate, undefined)
   })
+
+  // ---------------------------------------------------------------------
+  // defaultFetch：真正走网络的那一层。
+  // 之前只测了注入假 fetchLike 的链路，漏了这一层 —— 结果 0.1.11/0.1.12 真机上
+  // 一按「检查更新」就报 req.setTimeout is not a function（Electron 的
+  // ClientRequest 没有这个方法，那是 Node http 的 API）。
+  // 所以这里把 require('electron') 打桩成假 net，把这一层钉死。
+  // ---------------------------------------------------------------------
+  console.log('\n[defaultFetch] Electron net 这一层（ClientRequest 没有 setTimeout）')
+  const origLoad = Module._load
+  let stub = {}
+  let lastReq = null
+  const makeReq = () => ({
+    headers: {},
+    handlers: {},
+    ended: false,
+    aborted: false,
+    setHeader(k, v) {
+      this.headers[k] = v
+    },
+    on(ev, fn) {
+      this.handlers[ev] = fn
+    },
+    end() {
+      this.ended = true
+    },
+    abort() {
+      this.aborted = true
+    }
+  })
+  const makeRes = (status) => {
+    const h = {}
+    return {
+      statusCode: status,
+      on(ev, fn) {
+        h[ev] = fn
+      },
+      emit(ev, arg) {
+        if (h[ev]) h[ev](arg)
+      }
+    }
+  }
+  const useNetStub = () => {
+    stub = { net: { request: () => (lastReq = makeReq()) } }
+  }
+  Module._load = function (request) {
+    if (request === 'electron') return stub
+    return origLoad.apply(this, arguments)
+  }
+
+  // 1) 正常 200
+  useNetStub()
+  {
+    const p = defaultFetch('https://api.github.com/repos/a/b/releases/latest', 5000)
+    ok('请求已发出（end 被调用）', () => assert.strictEqual(lastReq.ended, true))
+    ok('带了 User-Agent（GitHub API 必须）', () =>
+      assert.strictEqual(lastReq.headers['User-Agent'], 'md-editor-updater'))
+    const res = makeRes(200)
+    lastReq.handlers.response(res)
+    res.emit('data', Buffer.from('{"tag_name":"v9.9.9"}'))
+    res.emit('end')
+    const out = await p
+    ok('拿到 status 与 body', () => {
+      assert.strictEqual(out.status, 200)
+      assert.strictEqual(out.body, '{"tag_name":"v9.9.9"}')
+    })
+  }
+
+  // 2) 超时：一直不响应 → 自己开的定时器 abort + reject
+  useNetStub()
+  {
+    const p = defaultFetch('https://api.github.com/x', 40)
+    let err = null
+    try {
+      await p
+    } catch (e) {
+      err = e
+    }
+    ok('超时会 abort 并报「请求超时」', () => {
+      assert.ok(err && /请求超时/.test(err.message), 'err=' + (err && err.message))
+      assert.strictEqual(lastReq.aborted, true)
+    })
+  }
+
+  // 3) 请求本身出错
+  useNetStub()
+  {
+    const p = defaultFetch('https://api.github.com/x', 5000)
+    lastReq.handlers.error(new Error('boom'))
+    let err = null
+    try {
+      await p
+    } catch (e) {
+      err = e
+    }
+    ok('请求出错 → reject 原始错误', () => assert.strictEqual(err.message, 'boom'))
+  }
+
+  // 4) 拿不到 electron.net 时不能把异常抛到界面上
+  stub = {}
+  {
+    let err = null
+    try {
+      await defaultFetch('https://api.github.com/x', 5000)
+    } catch (e) {
+      err = e
+    }
+    ok('没有 net 时只 reject，不崩', () => assert.ok(err instanceof Error))
+  }
+
+  // 5) 打桩到 net 层，整条 checkUpdate 跑通（和真机同一条代码路径）
+  useNetStub()
+  {
+    const p = checkUpdate('0.1.12', 'deepdfhy/md-editor')
+    const res = makeRes(200)
+    lastReq.handlers.response(res)
+    res.emit(
+      'data',
+      Buffer.from(
+        JSON.stringify({
+          tag_name: 'v0.2.0',
+          html_url: 'https://github.com/deepdfhy/md-editor/releases/tag/v0.2.0'
+        })
+      )
+    )
+    res.emit('end')
+    const r = await p
+    ok('走真实网络层跑通 checkUpdate', () => {
+      assert.strictEqual(r.ok, true)
+      assert.strictEqual(r.hasUpdate, true)
+      assert.strictEqual(r.current, '0.1.12')
+      assert.strictEqual(r.version, '0.2.0')
+      assert.strictEqual(
+        r.url,
+        'https://github.com/deepdfhy/md-editor/releases/tag/v0.2.0'
+      )
+    })
+  }
+
+  Module._load = origLoad
 
   console.log('\n结果：' + pass + ' 通过 / ' + fail + ' 失败\n')
   process.exit(fail ? 1 : 0)
