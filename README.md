@@ -2,7 +2,11 @@
 
 一款面向**代码笔记**的 Windows 桌面 Markdown 编辑器。4 列布局：目录树 / 文件列表 / 编辑器 / 大纲，笔记直接以 `.md` 文件存在你自己的文件夹里，不搞私有格式、不锁定数据。
 
-> 下载：[最新版本](../../releases/latest) → 下载 `MD 编辑器 x.y.z.exe`，双击即用（绿色版，免安装，不写注册表）。
+> 下载：[最新版本](../../releases/latest) → 下载 `MD 编辑器 Setup x.y.z.exe`，双击安装即可。
+>
+> - 首次安装可以自己选择安装目录
+> - 以后升级会自动识别上次的安装目录并原地覆盖，不会装出多个副本
+> - 升级时如果程序还在运行，安装器会提示「强制关闭并继续安装」
 
 ## 功能
 
@@ -41,13 +45,17 @@ npm run dev:all     # vite + electron 一起起来，改代码热更新
 
 ## 打包
 
+只出**安装包（NSIS）**，不再出绿色版。自定义安装逻辑在 `build/installer.nsh`：
+- 全新安装 → 显示目录选择页，可自定义安装目录
+- 已安装过 → 读注册表 `InstallLocation` 复用原目录，跳过安装模式页与目录页，原地覆盖
+- 覆盖安装检测到程序在运行 → 弹窗可选「强制关闭并继续安装」（先 WM_CLOSE，不退再强杀）
+
 ```bash
 npm run build                                        # 先构建前端
-npx electron-builder --win portable                  # 绿色版单文件 → release/
-npx electron-builder --win nsis                      # 安装版（含桌面快捷方式）
+npx electron-builder --win nsis                      # 安装包 → release/
 ```
 
-**发新版**：改 `package.json` 的 `version` → `git commit` → `git tag v0.1.11` → `git push --tags`，
+**发新版**：改 `package.json` 的 `version` → `git commit` → `git tag v0.1.12` → `git push --tags`，
 GitHub Actions（`.github/workflows/release.yml`）会自动构建并作为 Release 附件上传。
 
 ## 自检脚本

@@ -1,6 +1,6 @@
 {
   "name": "md-editor",
-  "version": "0.1.11",
+  "version": "0.1.12",
   "private": true,
   "description": "基于 Electron + Vue3 的 Markdown 编辑器，4 列布局，面向代码笔记",
   "main": "electron/main.js",
@@ -20,7 +20,7 @@
     "dev:all": "concurrently -k -n vite,electron \"npm:dev\" \"npm:electron:dev\"",
     "build": "vite build",
     "clean": "node scripts/clean.js",
-    "pack": "npm run clean && npm run build && electron-builder --win portable",
+    "pack": "npm run build && electron-builder --win nsis",
     "dist": "npm run clean && npm run build && electron-builder --win nsis",
     "set-repo": "node scripts/set-repo.cjs"
   },
@@ -55,10 +55,17 @@
       "target": "nsis"
     },
     "nsis": {
-      "oneClick": true,
+      "oneClick": false,
       "perMachine": false,
+      "allowElevation": false,
+      "installerLanguages": [
+        "zh_CN"
+      ],
+      "language": "2052",
       "createDesktopShortcut": true,
-      "createStartMenuShortcut": true
+      "createStartMenuShortcut": true,
+      "deleteAppDataOnUninstall": false,
+      "include": "build/installer.nsh"
     }
   }
 }

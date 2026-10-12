@@ -331,7 +331,7 @@ ipcMain.on('unwatchDir', unwatchDir)
 
 // ---------- 新版本检测（GitHub Releases） ----------
 // 仓库来源优先级：用户在设置里填的 > package.json 的 repository 字段。
-// 只做「发现新版本 → 打开发布页」，不做自动下载安装（绿色版让用户自己下最省事）。
+// 只做「发现新版本 → 打开发布页」，不做自动下载安装（安装包让用户自己下最省事）。
 function defaultRepo() {
   try {
     const pkg = JSON.parse(fs.readFileSync(path.join(app.getAppPath(), 'package.json'), 'utf-8'))

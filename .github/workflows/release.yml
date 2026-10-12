@@ -1,7 +1,7 @@
 name: Release
 
-# 打 tag 就自动出 Windows 绿色版并挂到 Release 上。
-# 用法：改 package.json 的 version → git commit → git tag v0.1.11 → git push --tags
+# 打 tag 就自动出 Windows 安装包（NSIS）并挂到 Release 上。
+# 用法：改 package.json 的 version → git commit → git tag v0.1.12 → git push --tags
 on:
   push:
     tags:
@@ -31,8 +31,8 @@ jobs:
       - name: 构建前端（vite）
         run: npm run build
 
-      - name: 打包绿色版（electron-builder）
-        run: npx electron-builder --win portable --publish never
+      - name: 打包安装包（electron-builder / NSIS）
+        run: npx electron-builder --win nsis --publish never
 
       - name: 上传到 Release
         uses: softprops/action-gh-release@v2
@@ -41,6 +41,8 @@ jobs:
           draft: false
           generate_release_notes: true
           body: |
-            下载下面的 `MD 编辑器 x.y.z.exe`，双击即用（绿色版，免安装）。
+            下载下面的 `MD 编辑器 Setup x.y.z.exe` 双击安装即可（标准 Windows 安装包）。
 
-            > 首次运行会解压到临时目录，稍等几秒即可。
+            - 首次安装可以自己选择安装目录
+            - 后续升级会自动识别上次的安装目录并原地覆盖，不会装出多个副本
+            - 升级时如果程序还在运行，安装器会提示是否强制关闭并继续
