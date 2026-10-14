@@ -149,6 +149,15 @@ onMounted(() => {
     if (mode.value === 'code') return
     lastStorage = toStorageMarkdown(editor.getMarkdown(), getSaveDir())
     emit('change', lastStorage)
+    // 所见即所得编辑后，ProseMirror 可能重渲导致高亮 range 失效，重新画一遍
+    if (searchOpen.value && searchQuery.value && mode.value === 'wysiwyg') {
+      if (wwRehlTimer) clearTimeout(wwRehlTimer)
+      wwRehlTimer = setTimeout(() => {
+        if (searchOpen.value && searchQuery.value && mode.value === 'wysiwyg') {
+          highlightWw(searchQuery.value)
+        }
+      }, 250)
+    }
   })
   editor.on('keyup', onEditorKeyup)
   if (props.file) {
@@ -482,7 +491,7 @@ function getHeadings() {
 
 // ---------- 笔记内搜索（搜索按钮 / Ctrl+F） ----------
 // 三种模式分别处理：
-// - 所见即所得：内容在 Toast UI 的 iframe 里，用 iframe 的 window.find()（原生高亮 + 自动滚动）
+// - 所见即所得：内容在 Toast UI 的 iframe 里，用 CSS Custom Highlight API 画高亮（不改动 DOM、不抢焦点、可精确滚动）
 // - 预览：内容渲染在主文档的 previewEl 里，自己遍历文本节点包 <mark>（只命中正文，不和工具栏/标题冲突）
 // - 代码：textarea，自己算匹配位置并用 setSelectionRange 跳转（无内联高亮，但选中可见）
 const searchOpen = ref(false)
@@ -499,6 +508,117 @@ let codeIdx = -1
 // 预览模式：所有高亮 <mark>
 let previewMarks = []
 let previewIdx = -1
+
+// 返回所见即所得 iframe 的 document（搜索高亮画在它里面）
+function wwDoc() {
+  if (mode.value === 'wysiwyg' && editorEl.value) {
+    const iframes = editorEl.value.querySelectorAll('iframe')
+    for (const f of iframes) {
+      try {
+        if (f.contentDocument) return f.contentDocument
+      } catch (_) {
+        /* 跨域等异常忽略 */
+      }
+    }
+  }
+  return null
+}
+
+// 所见即所得：用 CSS Custom Highlight API 在 iframe 文档里画高亮。
+// 关键好处：① 完全不改动 DOM（不影响 ProseMirror）② 不抢焦点（修复 BUG1：输入字符后输入框不丢焦点）
+// ③ 用真实元素的 scrollIntoView 精确滚动（修复 BUG2：上一个/下一个能滚到对应位置）
+let wwRanges = [] // [{ range, el }]，range/el 都属于 iframe 文档
+let wwIdx = -1
+let wwRehlTimer = null
+
+function wwCanHighlight(doc) {
+  const win = doc && doc.defaultView
+  return !!(win && win.CSS && win.CSS.highlights && win.Highlight)
+}
+
+function ensureWwHighlightStyle(doc) {
+  if (!doc || doc.getElementById('ep-search-hl-style')) return
+  const s = doc.createElement('style')
+  s.id = 'ep-search-hl-style'
+  s.textContent =
+    '::highlight(ep-search){background:#b58900;color:#fff;}' +
+    '::highlight(ep-search-active){background:#e51400;color:#fff;}'
+  const head = doc.head || doc.documentElement
+  if (head) head.appendChild(s)
+}
+
+function clearWwHighlight() {
+  const doc = wwDoc()
+  if (doc && wwCanHighlight(doc)) {
+    doc.defaultView.CSS.highlights.delete('ep-search')
+    doc.defaultView.CSS.highlights.delete('ep-search-active')
+  }
+  wwRanges = []
+  wwIdx = -1
+}
+
+function highlightWw(text) {
+  clearWwHighlight()
+  const doc = wwDoc()
+  if (!text || !doc) return
+  if (!wwCanHighlight(doc)) return // 兜底走原生 find（见 runSearch/searchStep）
+  ensureWwHighlightStyle(doc)
+  const win = doc.defaultView
+  const root = doc.body
+  const walker = doc.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      if (!node.nodeValue || !node.nodeValue.trim()) return NodeFilter.FILTER_REJECT
+      let p = node.parentNode
+      while (p && p !== root) {
+        const tag = p.tagName
+        if (tag === 'SCRIPT' || tag === 'STYLE') return NodeFilter.FILTER_REJECT
+        p = p.parentNode
+      }
+      return NodeFilter.FILTER_ACCEPT
+    }
+  })
+  const q = matchCase.value ? text : text.toLowerCase()
+  const targets = []
+  let n
+  while ((n = walker.nextNode())) targets.push(n)
+  targets.forEach((node) => {
+    const val = node.nodeValue
+    const h = matchCase.value ? val : val.toLowerCase()
+    let from = 0
+    let idx
+    while ((idx = h.indexOf(q, from)) !== -1) {
+      const range = doc.createRange()
+      range.setStart(node, idx)
+      range.setEnd(node, idx + text.length)
+      wwRanges.push({ range, el: node.parentElement })
+      from = idx + text.length
+    }
+  })
+  // 按文档位置排序，保证上/下翻页顺序正确
+  wwRanges.sort((a, b) => a.range.compareBoundaryPoints(Range.START_TO_START, b.range))
+  applyWwHighlight()
+}
+
+function applyWwHighlight() {
+  const doc = wwDoc()
+  if (!doc || !wwCanHighlight(doc)) return
+  const win = doc.defaultView
+  const all = new win.Highlight(...wwRanges.map((r) => r.range))
+  win.CSS.highlights.set('ep-search', all)
+  if (wwIdx >= 0 && wwRanges[wwIdx]) {
+    win.CSS.highlights.set('ep-search-active', new win.Highlight(wwRanges[wwIdx].range))
+  } else {
+    win.CSS.highlights.delete('ep-search-active')
+  }
+}
+
+function wwGoto(idx) {
+  if (!wwRanges.length) return
+  wwIdx = idx
+  applyWwHighlight()
+  const el = wwRanges[idx] && wwRanges[idx].el
+  if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+}
 
 // 返回要搜索的 window：所见即所得是 iframe，其它是主窗口（预览不走 window.find，自己包 mark）
 function getSearchWindow() {
@@ -700,26 +820,43 @@ function runSearch() {
     }
     return
   }
-  // 所见即所得（iframe）
-  const win = getSearchWindow()
-  if (!win) {
+  // 所见即所得（iframe）：CSS 高亮，不抢焦点、可精确滚动
+  const doc = wwDoc()
+  if (!doc) {
     matchTotal.value = 0
     matchIdx.value = 0
     searchFailed.value = true
     return
   }
-  const total = nativeCount(q, win)
-  matchTotal.value = total
-  if (total > 0) {
-    nativeFirst(q, win)
-    matchIdx.value = 1
-    searchFailed.value = false
+  if (wwCanHighlight(doc)) {
+    highlightWw(q)
+    matchTotal.value = wwRanges.length
+    if (wwRanges.length) {
+      wwIdx = 0
+      applyWwHighlight()
+      matchIdx.value = 1
+      searchFailed.value = false
+    } else {
+      wwIdx = -1
+      matchIdx.value = 0
+      searchFailed.value = true
+    }
   } else {
-    matchIdx.value = 0
-    searchFailed.value = true
-    try {
-      win.getSelection().removeAllRanges()
-    } catch (_) {}
+    // 兜底：原生 find（极少数不支持 CSS 高亮的环境）
+    const win = getSearchWindow()
+    const total = nativeCount(q, win)
+    matchTotal.value = total
+    if (total > 0) {
+      nativeFirst(q, win)
+      matchIdx.value = 1
+      searchFailed.value = false
+    } else {
+      matchIdx.value = 0
+      searchFailed.value = true
+      try {
+        win.getSelection().removeAllRanges()
+      } catch (_) {}
+    }
   }
 }
 
@@ -748,8 +885,21 @@ function searchStep(backward) {
     matchIdx.value = previewIdx + 1
     return
   }
+  const doc = wwDoc()
+  if (!doc) return
+  if (wwCanHighlight(doc)) {
+    if (!wwRanges.length) return
+    wwIdx = backward
+      ? wwIdx - 1 < 0
+        ? wwRanges.length - 1
+        : wwIdx - 1
+      : (wwIdx + 1) % wwRanges.length
+    wwGoto(wwIdx)
+    matchIdx.value = wwIdx + 1
+    return
+  }
+  // 兜底：原生 find
   const win = getSearchWindow()
-  if (!win) return
   const ok = nativeStep(q, win, backward)
   if (!ok) return
   matchIdx.value = backward
@@ -763,21 +913,12 @@ function clearSearch() {
   matchIdx.value = 0
   matchTotal.value = 0
   searchFailed.value = false
-  // 顺手清掉预览模式可能残留的 <mark>，避免切模式后留在隐藏的预览 DOM 里
-  clearPreviewMarks()
-  if (mode.value === 'code') {
-    codeMatches = []
-    codeIdx = -1
-  } else if (mode.value === 'preview') {
-    clearPreviewMarks()
-  } else {
-    const win = getSearchWindow()
-    if (win) {
-      try {
-        win.getSelection().removeAllRanges()
-      } catch (_) {}
-    }
+  if (wwRehlTimer) {
+    clearTimeout(wwRehlTimer)
+    wwRehlTimer = null
   }
+  clearPreviewMarks()
+  clearWwHighlight()
 }
 
 function openSearch() {
@@ -829,6 +970,7 @@ defineExpose({ scrollToHeading, setMode, openSearch })
 
 onBeforeUnmount(() => {
   clearTimeout(copiedTimer)
+  if (wwRehlTimer) clearTimeout(wwRehlTimer)
   if (wwRaf) window.cancelAnimationFrame(wwRaf)
   if (wwObserver) {
     wwObserver.disconnect()

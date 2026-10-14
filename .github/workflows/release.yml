@@ -39,6 +39,7 @@ jobs:
         with:
           files: release/*.exe
           draft: false
+          overwrite: true
           generate_release_notes: true
           body: |
             下载下面的 `MD 编辑器 Setup x.y.z.exe` 双击安装即可（标准 Windows 安装包）。
