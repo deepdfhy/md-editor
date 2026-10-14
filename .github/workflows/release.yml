@@ -1,7 +1,7 @@
 name: Release
 
 # 打 tag 就自动出 Windows 安装包（NSIS）并挂到 Release 上。
-# 用法：改 package.json 的 version → git commit → git tag v0.1.13 → git push --tags
+# 用法：改 package.json 的 version → git commit → git tag v0.1.14 → git push --tags
 on:
   push:
     tags:

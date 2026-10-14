@@ -171,6 +171,8 @@ onMounted(() => {
     wwObserver = new MutationObserver(scheduleLayoutWw)
     wwObserver.observe(pm, { childList: true, subtree: true, characterData: true })
   }
+  // 搜索：Ctrl+F 兜底拦截（主路径由菜单 accelerator 走 IPC）、Esc 关闭搜索
+  window.addEventListener('keydown', onSearchKeydown, true)
 })
 
 watch(
@@ -233,6 +235,10 @@ function onSourceInput(e) {
 async function setMode(m) {
   if (m === mode.value) {
     await applyMode()
+    if (searchOpen.value && searchQuery.value) {
+      await nextTick()
+      setTimeout(runSearch, 60)
+    }
     return
   }
   // 从代码模式切走：先把编辑框里的改动灌回编辑器
@@ -243,6 +249,11 @@ async function setMode(m) {
   mode.value = m
   if (m === 'code') syncSourceFromEditor()
   await applyMode()
+  // 切换模式后若搜索还开着，用新模式的搜索引擎重新检索
+  if (searchOpen.value && searchQuery.value) {
+    await nextTick()
+    setTimeout(runSearch, 60)
+  }
 }
 
 async function applyMode() {
@@ -469,7 +480,352 @@ function getHeadings() {
   return heads
 }
 
-defineExpose({ scrollToHeading, setMode })
+// ---------- 笔记内搜索（搜索按钮 / Ctrl+F） ----------
+// 三种模式分别处理：
+// - 所见即所得：内容在 Toast UI 的 iframe 里，用 iframe 的 window.find()（原生高亮 + 自动滚动）
+// - 预览：内容渲染在主文档的 previewEl 里，自己遍历文本节点包 <mark>（只命中正文，不和工具栏/标题冲突）
+// - 代码：textarea，自己算匹配位置并用 setSelectionRange 跳转（无内联高亮，但选中可见）
+const searchOpen = ref(false)
+const searchQuery = ref('')
+const matchCase = ref(false)
+const matchIdx = ref(0)
+const matchTotal = ref(0)
+const searchFailed = ref(false)
+const searchInput = ref(null)
+
+// 代码模式：预计算的所有匹配 [start, end]
+let codeMatches = []
+let codeIdx = -1
+// 预览模式：所有高亮 <mark>
+let previewMarks = []
+let previewIdx = -1
+
+// 返回要搜索的 window：所见即所得是 iframe，其它是主窗口（预览不走 window.find，自己包 mark）
+function getSearchWindow() {
+  if (mode.value === 'wysiwyg' && editorEl.value) {
+    const iframes = editorEl.value.querySelectorAll('iframe')
+    for (const f of iframes) {
+      try {
+        if (f.contentWindow) return f.contentWindow
+      } catch (_) {
+        /* 跨域等异常忽略 */
+      }
+    }
+  }
+  return window
+}
+
+function sameRange(a, b) {
+  return (
+    a &&
+    b &&
+    a.startContainer === b.startContainer &&
+    a.startOffset === b.startOffset &&
+    a.endOffset === b.endOffset
+  )
+}
+
+// 用原生 find 统计一个 window 内的匹配总数（带 wrapAround 循环计数，回到起点就停）
+function nativeCount(text, win) {
+  try {
+    win.getSelection().removeAllRanges()
+  } catch (_) {}
+  let total = 0
+  let first = null
+  let guard = 0
+  while (guard++ < 100000) {
+    const ok = win.find(text, matchCase.value, false, true)
+    if (!ok) break
+    const sel = win.getSelection()
+    const r = sel.rangeCount ? sel.getRangeAt(0).cloneRange() : null
+    if (total === 0) {
+      first = r
+      total = 1
+      continue
+    }
+    if (r && sameRange(r, first)) break
+    total++
+  }
+  return total
+}
+
+// 落回第一个匹配（高亮）
+function nativeFirst(text, win) {
+  try {
+    win.getSelection().removeAllRanges()
+  } catch (_) {}
+  win.find(text, matchCase.value, false, true)
+}
+
+function nativeStep(text, win, backward) {
+  return win.find(text, matchCase.value, backward, true)
+}
+
+// ---------- 代码模式：在 textarea 文本中找全部匹配 ----------
+function codeSearchAll(text) {
+  codeMatches = []
+  if (!text) return
+  const hay = sourceText.value
+  const q = matchCase.value ? text : text.toLowerCase()
+  const h = matchCase.value ? hay : hay.toLowerCase()
+  let i = h.indexOf(q)
+  while (i !== -1) {
+    codeMatches.push([i, i + text.length])
+    i = h.indexOf(q, i + text.length)
+  }
+}
+
+function codeGoto(idx) {
+  const pair = codeMatches[idx]
+  if (!pair) return
+  const [s, e] = pair
+  const ta = sourceEl.value
+  if (!ta) return
+  ta.focus()
+  try {
+    ta.setSelectionRange(s, e)
+  } catch (_) {}
+  const line = sourceText.value.slice(0, s).split('\n').length
+  const lh = parseFloat(window.getComputedStyle(ta).lineHeight) || 20
+  ta.scrollTop = Math.max(0, (line - 4) * lh)
+}
+
+// ---------- 预览模式：遍历文本节点包 <mark> ----------
+function clearPreviewMarks() {
+  if (!previewEl.value) return
+  previewEl.value.querySelectorAll('mark.ep-search-hit').forEach((m) => {
+    const parent = m.parentNode
+    if (!parent) return
+    parent.replaceChild(document.createTextNode(m.textContent), m)
+    parent.normalize()
+  })
+  previewMarks = []
+  previewIdx = -1
+}
+
+function highlightPreview(text) {
+  clearPreviewMarks()
+  if (!text || !previewEl.value) return
+  const root = previewEl.value
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      if (!node.nodeValue || !node.nodeValue.trim()) return NodeFilter.FILTER_REJECT
+      let p = node.parentNode
+      while (p && p !== root) {
+        const tag = p.tagName
+        if (
+          tag === 'SCRIPT' ||
+          tag === 'STYLE' ||
+          (tag === 'MARK' && p.classList.contains('ep-search-hit'))
+        ) {
+          return NodeFilter.FILTER_REJECT
+        }
+        p = p.parentNode
+      }
+      return NodeFilter.FILTER_ACCEPT
+    }
+  })
+  const q = matchCase.value ? text : text.toLowerCase()
+  const targets = []
+  let n
+  while ((n = walker.nextNode())) targets.push(n)
+  targets.forEach((node) => {
+    const val = node.nodeValue
+    const h = matchCase.value ? val : val.toLowerCase()
+    const ranges = []
+    let from = 0
+    let idx
+    while ((idx = h.indexOf(q, from)) !== -1) {
+      ranges.push([idx, idx + text.length])
+      from = idx + text.length
+    }
+    if (!ranges.length) return
+    const frag = document.createDocumentFragment()
+    let last = 0
+    ranges.forEach(([s, e]) => {
+      if (s > last) frag.appendChild(document.createTextNode(val.slice(last, s)))
+      const mark = document.createElement('mark')
+      mark.className = 'ep-search-hit'
+      mark.textContent = val.slice(s, e)
+      frag.appendChild(mark)
+      last = e
+    })
+    if (last < val.length) frag.appendChild(document.createTextNode(val.slice(last)))
+    node.parentNode.replaceChild(frag, node)
+  })
+  previewMarks = Array.from(root.querySelectorAll('mark.ep-search-hit'))
+}
+
+function previewGoto(idx) {
+  if (!previewMarks.length) return
+  previewMarks.forEach((m, i) => m.classList.toggle('active', i === idx))
+  const m = previewMarks[idx]
+  if (m) m.scrollIntoView({ behavior: 'smooth', block: 'center' })
+}
+
+// ---------- 统一入口 ----------
+function runSearch() {
+  const q = searchQuery.value
+  if (!q) {
+    clearSearch()
+    return
+  }
+  if (mode.value === 'code') {
+    codeSearchAll(q)
+    matchTotal.value = codeMatches.length
+    if (codeMatches.length) {
+      codeIdx = 0
+      codeGoto(0)
+      matchIdx.value = 1
+      searchFailed.value = false
+    } else {
+      codeIdx = -1
+      matchIdx.value = 0
+      searchFailed.value = true
+    }
+    return
+  }
+  if (mode.value === 'preview') {
+    highlightPreview(q)
+    matchTotal.value = previewMarks.length
+    if (previewMarks.length) {
+      previewIdx = 0
+      previewGoto(0)
+      matchIdx.value = 1
+      searchFailed.value = false
+    } else {
+      previewIdx = -1
+      matchIdx.value = 0
+      searchFailed.value = true
+    }
+    return
+  }
+  // 所见即所得（iframe）
+  const win = getSearchWindow()
+  if (!win) {
+    matchTotal.value = 0
+    matchIdx.value = 0
+    searchFailed.value = true
+    return
+  }
+  const total = nativeCount(q, win)
+  matchTotal.value = total
+  if (total > 0) {
+    nativeFirst(q, win)
+    matchIdx.value = 1
+    searchFailed.value = false
+  } else {
+    matchIdx.value = 0
+    searchFailed.value = true
+    try {
+      win.getSelection().removeAllRanges()
+    } catch (_) {}
+  }
+}
+
+function searchStep(backward) {
+  const q = searchQuery.value
+  if (!q) return
+  if (mode.value === 'code') {
+    if (!codeMatches.length) return
+    codeIdx = backward
+      ? codeIdx - 1 < 0
+        ? codeMatches.length - 1
+        : codeIdx - 1
+      : (codeIdx + 1) % codeMatches.length
+    codeGoto(codeIdx)
+    matchIdx.value = codeIdx + 1
+    return
+  }
+  if (mode.value === 'preview') {
+    if (!previewMarks.length) return
+    previewIdx = backward
+      ? previewIdx - 1 < 0
+        ? previewMarks.length - 1
+        : previewIdx - 1
+      : (previewIdx + 1) % previewMarks.length
+    previewGoto(previewIdx)
+    matchIdx.value = previewIdx + 1
+    return
+  }
+  const win = getSearchWindow()
+  if (!win) return
+  const ok = nativeStep(q, win, backward)
+  if (!ok) return
+  matchIdx.value = backward
+    ? matchIdx.value - 1 <= 0
+      ? matchTotal.value
+      : matchIdx.value - 1
+    : (matchIdx.value % matchTotal.value) + 1
+}
+
+function clearSearch() {
+  matchIdx.value = 0
+  matchTotal.value = 0
+  searchFailed.value = false
+  // 顺手清掉预览模式可能残留的 <mark>，避免切模式后留在隐藏的预览 DOM 里
+  clearPreviewMarks()
+  if (mode.value === 'code') {
+    codeMatches = []
+    codeIdx = -1
+  } else if (mode.value === 'preview') {
+    clearPreviewMarks()
+  } else {
+    const win = getSearchWindow()
+    if (win) {
+      try {
+        win.getSelection().removeAllRanges()
+      } catch (_) {}
+    }
+  }
+}
+
+function openSearch() {
+  searchOpen.value = true
+  nextTick(() => {
+    const el = searchInput.value
+    if (el) {
+      el.focus()
+      try {
+        el.select()
+      } catch (_) {}
+    }
+  })
+  if (searchQuery.value) runSearch()
+}
+
+function closeSearch() {
+  searchOpen.value = false
+  clearSearch()
+}
+
+function onSearchInputKeydown(e) {
+  if (e.key === 'Enter') {
+    e.preventDefault()
+    searchStep(e.shiftKey)
+  } else if (e.key === 'Escape') {
+    e.preventDefault()
+    e.stopPropagation()
+    closeSearch()
+  }
+}
+
+// Ctrl+F：菜单 accelerator 会优先拦截并走 IPC；这里是兜底（也顺手处理 Esc 关闭搜索）
+function onSearchKeydown(e) {
+  if ((e.ctrlKey || e.metaKey) && (e.key === 'f' || e.key === 'F')) {
+    e.preventDefault()
+    e.stopPropagation()
+    openSearch()
+    return
+  }
+  if (e.key === 'Escape' && searchOpen.value) {
+    e.preventDefault()
+    e.stopPropagation()
+    closeSearch()
+  }
+}
+
+defineExpose({ scrollToHeading, setMode, openSearch })
 
 onBeforeUnmount(() => {
   clearTimeout(copiedTimer)
@@ -481,6 +837,7 @@ onBeforeUnmount(() => {
   const body = bodyEl.value
   if (body) body.removeEventListener('scroll', scheduleLayoutWw, true)
   window.removeEventListener('resize', scheduleLayoutWw)
+  window.removeEventListener('keydown', onSearchKeydown, true)
   if (editor) editor.destroy()
 })
 </script>
@@ -494,6 +851,7 @@ onBeforeUnmount(() => {
       </span>
       <span v-if="savedFlash" class="ep-saved">✓ 已保存</span>
       <div class="ep-actions">
+        <button type="button" class="ep-find" @click="openSearch" title="在当前笔记中查找 (Ctrl+F)">查找</button>
         <button type="button" class="ep-save" @click="emit('save')" title="保存 (Ctrl+S)">保存</button>
         <div class="ep-modes">
           <button :class="{ active: mode === 'wysiwyg' }" @click="setMode('wysiwyg')">所见即所得</button>
@@ -522,6 +880,26 @@ onBeforeUnmount(() => {
         @mousedown.prevent
         @click="copyWwCode(b)"
       >{{ copiedKey === b.key ? '已复制' : '复制' }}</button>
+      <div v-if="searchOpen" class="ep-search">
+        <input
+          ref="searchInput"
+          class="ep-search-input"
+          type="text"
+          v-model="searchQuery"
+          @input="runSearch"
+          @keydown="onSearchInputKeydown"
+          placeholder="在当前笔记中查找…"
+        />
+        <label class="ep-search-case">
+          <input type="checkbox" v-model="matchCase" @change="runSearch" /> 区分大小写
+        </label>
+        <span class="ep-search-count" :class="{ none: searchFailed }">
+          {{ matchTotal ? (matchIdx + ' / ' + matchTotal) : (searchQuery ? '无匹配' : '') }}
+        </span>
+        <button type="button" class="ep-search-btn" @click="searchStep(true)" title="上一个 (Shift+Enter)">↑</button>
+        <button type="button" class="ep-search-btn" @click="searchStep(false)" title="下一个 (Enter)">↓</button>
+        <button type="button" class="ep-search-close" @click="closeSearch" title="关闭 (Esc)">✕</button>
+      </div>
     </div>
   </div>
 </template>

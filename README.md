@@ -55,7 +55,7 @@ npm run build                                        # 先构建前端
 npx electron-builder --win nsis                      # 安装包 → release/
 ```
 
-**发新版**：改 `package.json` 的 `version` → `git commit` → `git tag v0.1.13` → `git push --tags`，
+**发新版**：改 `package.json` 的 `version` → `git commit` → `git tag v0.1.14` → `git push --tags`，
 GitHub Actions（`.github/workflows/release.yml`）会自动构建并作为 Release 附件上传。
 
 ## 自检脚本

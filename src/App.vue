@@ -834,6 +834,7 @@ onMounted(() => {
     else if (action === 'settings') openSettings()
     else if (action === 'toggle-theme') toggleTheme()
     else if (action === 'check-update') checkUpdate(true)
+    else if (action === 'find') editorRef.value?.openSearch()
   })
   window.addEventListener('keydown', onKeydown)
   window.addEventListener('click', closeSwitchMenu)
