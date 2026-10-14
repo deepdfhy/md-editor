@@ -1072,6 +1072,16 @@ button {
   background: var(--danger);
   color: #fff;
 }
+
+/* 所见即所得搜索高亮（CSS Custom Highlight，不改动 DOM、不抢焦点） */
+::highlight(ep-search) {
+  background: #b58900;
+  color: #fff;
+}
+::highlight(ep-search-active) {
+  background: #e51400;
+  color: #fff;
+}
 .ep-file {
   font-family: var(--mono);
   font-size: 12px;
