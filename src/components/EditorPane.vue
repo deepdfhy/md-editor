@@ -516,12 +516,23 @@ let codeIdx = -1
 let previewMarks = []
 let previewIdx = -1
 
-// 返回所见即所得的内容根节点：Toast UI 的 wysiwyg 是用 ProseMirror 直接渲染在主文档里的（不是 iframe），
-// 所以搜索高亮画在主文档、并限定在编辑器内容区（.ProseMirror）内，避免误搜工具栏/标题。
+// 返回所见即所得的内容根节点（真正的滚动/高亮作用对象）。
+// 关键坑（已实测钉死）：Toast UI 在同一 DOM 里会同时渲染「markdown 模式」与「wysiwyg 模式」
+// 两套容器，隐藏的那套（display:none）里也有一个 .ProseMirror，且因 DOM 顺序靠前、
+// `querySelector('.ProseMirror')` 会先抓到**隐藏**的那个 → 高亮画上去用户看不见、滚动也是空滚。
+// 所以这里必须从所有 .ProseMirror 里挑出**可见**的那个（即 ww-mode 里、getBoundingClientRect 非 0 的）。
+// 另外：真正的滚动容器就是这个可见 .ProseMirror 本身（其 computed overflow 是 auto，
+// scrollHeight 远超 clientHeight，Toast UI 把 .toastui-editor-contents 也挂在它上面）。
 function wwRoot() {
   if (mode.value !== 'wysiwyg' || !editorEl.value) return null
+  const all = editorEl.value.querySelectorAll('.ProseMirror')
+  for (const pm of all) {
+    const r = pm.getBoundingClientRect()
+    // 选可见的那个：宽高都非 0 才说明正显示在视口里（隐藏容器宽高为 0）
+    if (r.width > 0 && r.height > 0) return pm
+  }
   return (
-    editorEl.value.querySelector('.ProseMirror') ||
+    all[0] ||
     editorEl.value.querySelector('.toastui-editor-ww-container') ||
     null
   )
@@ -595,44 +606,69 @@ function applyWwHighlight() {
   }
 }
 
-// 沿 DOM 向上找「最近的可见滚动祖先」。
-// 关键点：Toast UI wysiwyg 的外层 .toastui-editor-ww-container 是 overflow:hidden（不可滚动），
-// 真正滚动的是内部的 .toastui-editor-contents（overflow:auto）。直接用 scrollIntoView 会因为
-// overflow:hidden 的祖先而找不到正确滚动容器，所以这里手动定位并直接算 scrollTop。
-function getScrollParent(el) {
+// 沿 DOM 向上收集「所有可滚动祖先」，从里到外；外层是 Toast UI / app 的滚动容器。
+// 关键点：Toast UI wysiwyg 的真实滚动容器并不唯一——外层 .toastui-editor-ww-container
+// 是 overflow:hidden（不可滚动），但它的父级 .toastui-editor-main / .toastui-editor-defaultUI /
+// .ep-editor / .ep-body 中「实际可滚动」的那一级可能因布局不同而变（height:100% 链裁剪后，
+// 最外层可滚动节点才是真滚动者）。所以这里**不止找第一个**，而是把所有满足
+// `overflow:(auto|scroll|overlay) 且内容溢出` 的祖先都收进来，逐个设 scrollTop，
+// 无论哪一级在滚都能滚到命中项。
+function getScrollAncestors(el) {
+  const list = []
   let node = el.parentElement
-  while (node && node !== document.body) {
+  while (node && node !== document.body && node !== document.documentElement) {
     const cs = getComputedStyle(node)
     const scrollable =
       /^(auto|scroll|overlay)$/.test(cs.overflowY) ||
       /^(auto|scroll|overlay)$/.test(cs.overflowX)
-    if (scrollable && (node.scrollHeight > node.clientHeight || node.scrollWidth > node.clientWidth)) {
-      return node
+    if (scrollable && (node.scrollHeight > node.clientHeight + 1 || node.scrollWidth > node.clientWidth + 1)) {
+      list.push(node)
     }
     node = node.parentElement
   }
-  return null
+  return list
 }
 
-// 把元素滚动到滚动容器的可视区中央（用 getBoundingClientRect 计算，不依赖 offsetParent）。
+// 把命中元素滚动到可视区中央。用 getBoundingClientRect 计算差值，然后**直接赋值 scrollTop**
+// （不用 scrollTo({behavior:'smooth'})，避免个别元素/引擎对 smooth 不生效导致“点了没动”）。
+// 关键：wysiwyg 的真实滚动容器就是可见的 .ProseMirror 自身（computed overflow:auto，且
+// Toast UI 把 .toastui-editor-contents 也挂在它上面），所以**优先用 wwRoot() 当滚动容器**，
+// 命中元素相对它居中。只有当可见 PM 不可滚时，才退回通用 getScrollAncestors 找它的真滚动祖先。
 function scrollElCenter(el) {
   if (!el) return
-  const container = getScrollParent(el)
+  let container = null
+  const root = wwRoot()
+  if (root && root !== el && root.scrollHeight > root.clientHeight + 1) {
+    const rcs = getComputedStyle(root)
+    if (/^(auto|scroll|overlay)$/.test(rcs.overflowY)) container = root
+  }
   if (!container) {
-    el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    const ancestors = getScrollAncestors(el)
+    // getScrollAncestors 是从里到外 push 的，ancestors[0] 是离命中元素最近（最内层）的滚动容器；
+    // 只滚它一个，避免多容器互相干扰
+    container = ancestors[0] || null
+  }
+  if (!container) {
+    // 实在找不到，退回原生 scrollIntoView（至少浏览器自己会滚）
+    try {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    } catch (_) {
+      el.scrollIntoView(true)
+    }
     return
   }
   const er = el.getBoundingClientRect()
   const cr = container.getBoundingClientRect()
   const target = container.scrollTop + (er.top + er.height / 2) - (cr.top + cr.height / 2)
-  container.scrollTo({ top: target, behavior: 'smooth' })
+  container.scrollTop = Math.max(0, target)
 }
 
 function wwGoto(idx) {
   if (!wwRanges.length) return
   wwIdx = idx
   applyWwHighlight()
-  const el = wwRanges[idx] && wwRanges[idx].el
+  const rec = wwRanges[idx]
+  const el = rec && rec.el
   scrollElCenter(el)
 }
 

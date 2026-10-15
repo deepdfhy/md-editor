@@ -1,7 +1,9 @@
-// 搜索滚动算法单测：抽出 EditorPane.vue 里 `getScrollParent` / `scrollElCenter` 的**纯逻辑**
-//（不依赖真实 DOM，用桩对象模拟 Toast UI 的 DOM 层级），验证 BUG4 修复的核心：
-// 在 overflow:hidden 的外壳（.ww-container）下，能否正确定位内部 overflow:auto 的
-// 真实滚动容器（.toastui-editor-contents），且居滚动目标计算在「命中项在上/下方」都正确。
+// 搜索滚动算法单测（对应 BUG4 真实根因，已用 Playwright 真机 DOM 钉死）：
+//  1) Toast UI 会在同 DOM 里渲染「md 模式」与「ww 模式」两套容器，各有一个 .ProseMirror；
+//     隐藏的那套装 display:none 但 DOM 靠前，querySelector('.ProseMirror') 会先抓到**隐藏**的
+//     → 高亮/滚动作用在看不见的节点上（这就是“能搜到但不滚动”的真根因）。
+//  2) 真实滚动容器 = 可见的 .ProseMirror 自身（computed overflow:auto，scrollHeight 远超 clientHeight）。
+// 本测试验证「选可见 PM」的核心逻辑 + 滚动目标计算。纯 Node，不依赖真实 DOM。
 //
 // 跑法：node scripts/t-scroll.cjs
 'use strict'
@@ -9,138 +11,103 @@
 let pass = 0
 let fail = 0
 function ok(cond, msg) {
-  if (cond) {
-    pass++
-    console.log('  ✓ ' + msg)
-  } else {
-    fail++
-    console.error('  ✗ ' + msg)
-  }
+  if (cond) { pass++; console.log('  ✓ ' + msg) }
+  else { fail++; console.error('  ✗ ' + msg) }
 }
 
-// ---- 造一个轻量桩 DOM：带 parentElement / getComputedStyle 所需字段 / 滚动属性 ----
-// 层级（对齐 Toast UI wysiwyg 真实结构）：
-//   body
-//    └ .ep-editor
-//       └ .toastui-editor-ww-container   (overflow: hidden —— 不可滚动的外壳)
-//          └ .toastui-editor-contents    (overflow: auto  —— 真正滚动的容器)
-//             └ .ProseMirror
-//                └ p                      ← 命中元素 el 的父
-//                   └ [text] hit
 function makeEl(className, opt = {}) {
   return {
-    className: className || '',
-    tagName: 'DIV',
-    parentElement: null,
+    className: className || '', tagName: 'DIV', parentElement: null,
     _style: { overflowY: opt.overflowY || 'visible', overflowX: opt.overflowX || 'visible' },
     scrollHeight: opt.scrollHeight != null ? opt.scrollHeight : 100,
     clientHeight: opt.clientHeight != null ? opt.clientHeight : 100,
-    scrollWidth: opt.scrollWidth != null ? opt.scrollWidth : 100,
-    clientWidth: opt.clientWidth != null ? opt.clientWidth : 100,
     scrollTop: opt.scrollTop != null ? opt.scrollTop : 0,
     _rect: opt.rect || null,
-    // 模拟 getBoundingClientRect
-    getBoundingClientRect() {
-      return this._rect || { top: 0, left: 0, height: clientHeightHACK(this), width: this.clientWidth }
-    }
+    getBoundingClientRect() { return this._rect || { top: 0, height: this.clientHeight, width: 100 } }
   }
 }
-function clientHeightHACK(el) {
-  return el.clientHeight
+
+// 造一个「可见 PM + 隐藏 PM」共存的场景
+function buildCtx() {
+  // 隐藏的 md 容器（display:none）：PM 高宽 0
+  const mdHiddenPm = makeEl('ProseMirror', { overflowY: 'auto', scrollHeight: 0, clientHeight: 0, rect: { top: 0, height: 0, width: 0 } })
+  // 可见的 ww 容器：PM 自身 overflow:auto，内容溢出 18817>712
+  const visiblePm = makeEl('ProseMirror toastui-editor-contents ProseMirror', {
+    overflowY: 'auto', scrollHeight: 18817, clientHeight: 712, scrollTop: 0, rect: { top: 0, height: 712, width: 642 }
+  })
+  const hit = makeEl('') // 命中元素（某个 <p>）
+  hit.parentElement = visiblePm
+  visiblePm.parentElement = makeEl('toastui-editor-ww-container', { overflowY: 'hidden', rect: { top: 0, height: 712 } })
+  return { mdHiddenPm, visiblePm, hit }
 }
 
-// 组装层级
-const contents = makeEl('toastui-editor-contents', {
-  overflowY: 'auto',
-  scrollHeight: 3000,
-  clientHeight: 600, // 可视高 600
-  scrollTop: 0,
-  rect: { top: 0, height: 600 }
-})
-const wwContainer = makeEl('toastui-editor-ww-container', { overflowY: 'hidden', rect: { top: 0, height: 600 } })
-const editorBox = makeEl('ep-editor', { rect: { top: 0, height: 600 } })
-const body = makeEl('BODY', { rect: { top: 0, height: 900 } })
-
-const pm = makeEl('ProseMirror')
-const p = makeEl('')
-const hit = makeEl('', { rect: null }) // 命中元素（文本节点的父，即 <p>）
-
-pm.parentElement = contents
-contents.parentElement = wwContainer
-wwContainer.parentElement = editorBox
-editorBox.parentElement = body
-p.parentElement = pm
-hit.parentElement = p
-// body 的上层设为 null（模拟到顶）
-body.parentElement = null
-
-// ---- 复刻 EditorPane.vue 里的 getScrollParent（纯逻辑） ----
-function getScrollParent(el) {
-  let node = el.parentElement
-  while (node && node.tagName !== 'BODY') {
-    const cs = node._style
-    const scrollable =
-      /^(auto|scroll|overlay)$/.test(cs.overflowY) ||
-      /^(auto|scroll|overlay)$/.test(cs.overflowX)
-    if (scrollable && (node.scrollHeight > node.clientHeight || node.scrollWidth > node.clientWidth)) {
-      return node
-    }
-    node = node.parentElement
+// ---- 复刻 EditorPane.vue 的 wwRoot()：从所有 .ProseMirror 里选「可见」的那个 ----
+function wwRootFrom(allPms, editorEl) {
+  if (!editorEl) return null
+  for (const pm of allPms) {
+    const r = pm.getBoundingClientRect()
+    if (r.width > 0 && r.height > 0) return pm
   }
-  return null
+  return allPms[0] || null
 }
 
-// ---- 复刻 scrollElCenter 的目标计算（纯逻辑，去掉真实 scrollTo）----
-function computeScrollTarget(el) {
-  const container = getScrollParent(el)
-  if (!container) return null // 走兜底 scrollIntoView
+// ---- 复刻 scrollElCenter 的核心：优先用可见 PM 作滚动容器，算中心 target ----
+function computeScrollTarget(el, container) {
   const er = el.getBoundingClientRect()
   const cr = container.getBoundingClientRect()
   return container.scrollTop + (er.top + er.height / 2) - (cr.top + cr.height / 2)
 }
 
-console.log('## getScrollParent：overflow:hidden 外壳下能否定位到内部滚动容器')
+console.log('## wwRoot：必须选中「可见」的 .ProseMirror（而非 DOM 里第一个）')
 {
-  const sp = getScrollParent(hit)
-  ok(sp === contents, '应返回 .toastui-editor-contents（overflow:auto），而非 overflow:hidden 的 .ww-container')
-  ok(sp && sp.className === 'toastui-editor-contents', '返回值确实是内容滚动容器')
-  ok(getScrollParent(contents) === null, '.contents 自身无上层的可滚动祖先 → null（不再向上爬到 .ww-container）')
+  const ctx = buildCtx()
+  // 模拟 editorEl.querySelectorAll('.ProseMirror') — 隐藏的那套 DOM 靠前
+  const all = [ctx.mdHiddenPm, ctx.visiblePm]
+  // 旧逻辑：querySelector('.ProseMirror') === all[0]（隐藏的）→ 这就是“看不到/不滚动”的根因
+  const oldPick = all[0]
+  ok(oldPick === ctx.mdHiddenPm, '旧逻辑拿到的是隐藏 PM（width=0）→ 高亮画在看不见的地方')
+  ok(ctx.mdHiddenPm.getBoundingClientRect().width === 0, '隐藏 PM 宽为 0，确认不可见')
+  const picked = wwRootFrom(all, {})
+  ok(picked === ctx.visiblePm, '新逻辑从两个 PM 里选中可见的那个')
+  ok(picked.getBoundingClientRect().width > 0, '可见 PM 宽 642 > 0')
 }
 console.log('')
 
-// 命中项居中计算：命中项中心在可视区下方 → target 应为正（向下滚）
-console.log('## computeScrollTarget：命中项在可视区下方 → target > 0（向下滚）')
+console.log('## 可见 PM 自身就是滚动容器（overflow:auto, sh18817>ch712）')
 {
-  // hit 元素在可视区（相对视口）位于内容下方：top=1800, height=40（scrollTop=0）
-  hit._rect = { top: 1800, height: 40 }
-  const t = computeScrollTarget(hit)
-  // target = scrollTop(0) + (1800 + 20) - (0 + 300) = 1520
-  ok(t === 1520, 'target 应为 1520，实测 ' + t + ' → 向下滚动让命中项居中')
+  const ctx = buildCtx()
+  const pm = ctx.visiblePm
+  const cs = pm._style
+  const isScrollable = /^(auto|scroll|overlay)$/.test(cs.overflowY) && pm.scrollHeight > pm.clientHeight + 1
+  ok(isScrollable, '可见 PM overflow:auto 且溢出 → 它自己就是滚动容器')
+  // 命中元素在下方：top=18000（接近底部），height=40
+  ctx.hit._rect = { top: 18000, height: 40 }
+  const t = computeScrollTarget(ctx.hit, pm)
+  // target = scrollTop(0) + (18000+20) - (0+356) = 17664
+  ok(t === 17664, '向下滚 target=17664（命中项居中），实测 ' + t)
+  ok(t <= pm.scrollHeight - pm.clientHeight + 0.5, 'target 未超过最大滚动范围(overflow 会截断)')
 }
 console.log('')
 
-// 命中项在可视区上方（已滚到很下面）→ target < 当前 scrollTop（向上滚）
-console.log('## computeScrollTarget：命中项在可视区上方 → target 变小（向上滚）')
+console.log('## 滚动目标计算：命中项已在可视区中央 → target 不变')
 {
-  // 现在 contents 已经滚到 scrollTop=2000，命中项 <p> 位于文档前部：p.top = 2100（相对视口），
-  // 因为已滚动 2000，p 在文档坐标 2100+... 但这里是相对视口坐标：p.top=2100-? 直接给相对视口
-  // 假设 hit 在视口上方：er.top = -1500, height=40
-  hit._rect = { top: -1500, height: 40 }
-  contents._rect = { top: 0, height: 600 }
-  contents.scrollTop = 1200
-  const t = computeScrollTarget(hit)
-  // target = 1200 + (-1500 + 20) - (0 + 300) = -580
-  ok(t === -580, 'target 应为 -580（向上滚），实测 ' + t)
+  const ctx = buildCtx()
+  const pm = ctx.visiblePm
+  ctx.hit._rect = { top: 336, height: 40 } // 中心 356 = 可视高 712 的中心
+  const t = computeScrollTarget(ctx.hit, pm)
+  ok(t === 0, '目标 0（无需滚动），实测 ' + t)
 }
 console.log('')
 
-// 命中项就在视口中央附近 → target 基本等于当前 scrollTop（几乎不动）
-console.log('## computeScrollTarget：命中项已在可视区中央 → target ≈ scrollTop')
+console.log('## 滚动目标计算：命中项在上方 → target 变小（向上滚）')
 {
-  contents.scrollTop = 500
-  hit._rect = { top: 280, height: 40 } // 中心 300 = 容器中心
-  const t = computeScrollTarget(hit)
-  ok(t === 500, 'target 应为 500（不滚动），实测 ' + t)
+  const ctx = buildCtx()
+  const pm = ctx.visiblePm
+  pm.scrollTop = 15000
+  ctx.hit._rect = { top: 200, height: 40 }
+  const t = computeScrollTarget(ctx.hit, pm)
+  // target = 15000 + (200+20) - 356 = 14864
+  ok(t === 14864, '向上滚 target=14864（<15000），实测 ' + t)
 }
 console.log('')
 

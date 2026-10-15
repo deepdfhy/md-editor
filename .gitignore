@@ -12,6 +12,14 @@ release*/
 scripts/_shot*.png
 scripts/shot-*.png
 scripts/__diag_cover.png
+scripts/__pw_shot.png
+
+# 沙箱内排查用的一次性 Playwright 诊断脚本（不进版本库）
+scripts/_probe.js
+scripts/_pw-min.js
+scripts/pw-diag.js
+scripts/pw-order.js
+scripts/pw-scroll-focus.js
 
 # 编辑器 / 系统
 .vscode/
