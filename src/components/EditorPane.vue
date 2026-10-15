@@ -588,12 +588,45 @@ function applyWwHighlight() {
   }
 }
 
+// 沿 DOM 向上找「最近的可见滚动祖先」。
+// 关键点：Toast UI wysiwyg 的外层 .toastui-editor-ww-container 是 overflow:hidden（不可滚动），
+// 真正滚动的是内部的 .toastui-editor-contents（overflow:auto）。直接用 scrollIntoView 会因为
+// overflow:hidden 的祖先而找不到正确滚动容器，所以这里手动定位并直接算 scrollTop。
+function getScrollParent(el) {
+  let node = el.parentElement
+  while (node && node !== document.body) {
+    const cs = getComputedStyle(node)
+    const scrollable =
+      /^(auto|scroll|overlay)$/.test(cs.overflowY) ||
+      /^(auto|scroll|overlay)$/.test(cs.overflowX)
+    if (scrollable && (node.scrollHeight > node.clientHeight || node.scrollWidth > node.clientWidth)) {
+      return node
+    }
+    node = node.parentElement
+  }
+  return null
+}
+
+// 把元素滚动到滚动容器的可视区中央（用 getBoundingClientRect 计算，不依赖 offsetParent）。
+function scrollElCenter(el) {
+  if (!el) return
+  const container = getScrollParent(el)
+  if (!container) {
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    return
+  }
+  const er = el.getBoundingClientRect()
+  const cr = container.getBoundingClientRect()
+  const target = container.scrollTop + (er.top + er.height / 2) - (cr.top + cr.height / 2)
+  container.scrollTo({ top: target, behavior: 'smooth' })
+}
+
 function wwGoto(idx) {
   if (!wwRanges.length) return
   wwIdx = idx
   applyWwHighlight()
   const el = wwRanges[idx] && wwRanges[idx].el
-  if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  scrollElCenter(el)
 }
 
 // 返回要搜索的 window：所见即所得是 iframe，其它是主窗口（预览不走 window.find，自己包 mark）
@@ -807,8 +840,7 @@ function runSearch() {
     highlightWw(q)
     matchTotal.value = wwRanges.length
     if (wwRanges.length) {
-      wwIdx = 0
-      applyWwHighlight()
+      wwGoto(0)
       matchIdx.value = 1
       searchFailed.value = false
     } else {
