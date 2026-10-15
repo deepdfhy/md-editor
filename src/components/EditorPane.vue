@@ -188,6 +188,9 @@ watch(
   () => props.file,
   async () => {
     if (!editor || !props.file) return
+    // 切文件前：清掉旧文件残留的搜索高亮/计数（CSS ::highlight 是全局的，
+    // 若不清，旧 .ProseMirror 上的黄/红块会在切走后残留，且 wwRanges 会指向旧内容失效）。
+    clearSearch()
     lastStorage = toStorageMarkdown(props.content || '', getSaveDir())
     editor.setMarkdown(toDisplayMarkdown(props.content || '', getSaveDir()), false)
     sourceText.value = lastStorage
@@ -195,6 +198,10 @@ watch(
     await nextTick()
     scheduleLayoutWw()
     setTimeout(scheduleLayoutWw, 120)
+    // 若切文件后搜索条仍开着，用新文件内容重新检索
+    if (searchOpen.value && searchQuery.value) {
+      setTimeout(runSearch, 60)
+    }
     emit('loaded', lastStorage)
   }
 )
