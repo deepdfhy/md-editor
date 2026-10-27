@@ -120,6 +120,20 @@ function mkScanner(ignoreRaw) {
     ok(names.includes('app.js'), '未匹配的文件仍在')
   }
 
+  console.log('\n[3b] listFilesDeep：递归列出当前目录 + 所有子目录，带相对路径，遵守忽略')
+  {
+    const sc = mkScanner(undefined)
+    const deep = await sc.listFilesDeep(ROOT)
+    const rels = deep.map((f) => f.relPath)
+    ok(rels.includes('readme.md'), '含当前目录直属文件')
+    ok(rels.includes('sub/a.md'), '含一层子目录文件（相对路径 sub/a.md）')
+    ok(rels.includes('sub/images/cover.png'), '含两层子目录文件（相对路径 sub/images/cover.png）')
+    ok(!rels.some((r) => r.includes('.secret.md')), '. 开头文件被忽略')
+    ok(!rels.some((r) => r.startsWith('.git')), '.git 目录被忽略')
+    ok(!rels.some((r) => r.startsWith('空目录占位')), '空目录不出现在文件列表（只列文件）')
+    eq(deep.find((f) => f.relPath === 'sub/a.md').kind, 'note', '子目录笔记 kind 正确')
+  }
+
   console.log('\n[4] scanNotes：未分类 + 分类 结构')
   {
     const sc = mkScanner(undefined)

@@ -5,6 +5,7 @@ contextBridge.exposeInMainWorld('md', {
   openFolder: () => ipcRenderer.invoke('openFolder'),
   readTree: (dir) => ipcRenderer.invoke('readTree', dir),
   listFiles: (dir) => ipcRenderer.invoke('listFiles', dir),
+  listFilesDeep: (dir) => ipcRenderer.invoke('listFilesDeep', dir),
   scanNotes: (dir, selfPath) => ipcRenderer.invoke('scanNotes', dir, selfPath),
   readFile: (p) => ipcRenderer.invoke('readFile', p),
   writeFile: (p, content) => ipcRenderer.invoke('writeFile', p, content),

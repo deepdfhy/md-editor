@@ -157,6 +157,15 @@ const names = (tree) => tree.children.map((c) => c.name).sort()
   const files = await call('listFiles', NOTES)
   eq(files.map((f) => f.name), ['a.md'], 'md 列表只剩 a.md（.secret.md 被过滤）')
 
+  console.log('\n[3b] listFilesDeep：递归列出当前目录 + 所有子目录的文件，带 relPath')
+  const deep = await call('listFilesDeep', NOTES)
+  eq(
+    deep.map((f) => f.relPath).sort(),
+    ['a.md', 'sub/b.md'],
+    '递归列表含当前目录 + 子目录，且 .secret.md / .git / node_modules / dist / .recycle 都被过滤'
+  )
+  eq(!!deep.find((f) => f.relPath === 'sub/b.md'), true, '子目录文档带相对路径 relPath')
+
   console.log('\n[4] setConfig 改忽略规则 → 立即生效')
   await call('setConfig', {
     recentDirs: [NOTES],

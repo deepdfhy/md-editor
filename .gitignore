@@ -20,6 +20,7 @@ scripts/_pw-min.js
 scripts/pw-diag.js
 scripts/pw-order.js
 scripts/pw-scroll-focus.js
+scripts/pw-deep-search.js
 
 # 编辑器 / 系统
 .vscode/

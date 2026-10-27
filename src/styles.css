@@ -844,6 +844,17 @@ button {
 .fl-name {
   overflow: hidden;
   text-overflow: ellipsis;
+  min-width: 0;
+}
+/* 搜索命中子目录文档时，显示相对路径（区别于当前目录文件） */
+.fl-path {
+  flex: none;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 11px;
+  color: var(--text-2);
+  opacity: 0.85;
 }
 .fl-empty {
   padding: 20px 12px;

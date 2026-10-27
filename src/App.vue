@@ -19,6 +19,7 @@ const tree = ref(null)
 const rootDir = ref('')
 const selectedDir = ref('')
 const files = ref([])
+const deepFiles = ref([]) // 选中目录下所有子目录的文件（递归，搜索展示子目录命中用）
 const searchQuery = ref('')
 const col1W = ref(240)
 const col2W = ref(240) // 第2列默认宽度（约为之前弹性宽度的 2/3），可拖拽调节
@@ -162,7 +163,10 @@ const orderedFiles = computed(() => {
 const displayItems = computed(() => {
   const q = searchQuery.value.trim()
   if (!q) return orderedFiles.value
-  const map = new Map(orderedFiles.value.map((f) => [f.path, f]))
+  // 索引是递归的（含所有子目录），所以搜索命中时用 deepFiles 建大 map，
+  // 子目录里的文档也能被搜出来展示；没命中子目录的只取当前目录项。
+  const pool = deepFiles.value.length ? deepFiles.value : orderedFiles.value
+  const map = new Map(pool.map((f) => [f.path, f]))
   const out = []
   const seen = new Set()
   const res = search.search(q)
@@ -176,7 +180,7 @@ const displayItems = computed(() => {
   }
   // 全文检索只索引了笔记正文，图片/css/js 这类附件按文件名补一次匹配
   const lq = q.toLowerCase()
-  for (const f of orderedFiles.value) {
+  for (const f of pool) {
     if (!seen.has(f.path) && f.name.toLowerCase().includes(lq)) {
       out.push(f)
       seen.add(f.path)
@@ -355,15 +359,22 @@ async function selectDir(node, remember = true) {
   if (remember) await saveConfig()
 }
 
-// 列出目录下「全部文件」（笔记 + 图片 + 代码 + 文本），但只给笔记建全文索引
+// 列出目录下「全部文件」（笔记 + 图片 + 代码 + 文本），但只给笔记建全文索引。
+// 选中目录搜索时同时搜所有子目录：所以除了单层 listFiles（第 2 列展示用），
+// 还调 listFilesDeep 递归收集「当前目录 + 所有子目录」的笔记，一并进全文索引。
 async function loadFiles(dir) {
   if (!dir) return
-  const list = await fs.listFiles(dir)
+  const [list, deep] = await Promise.all([fs.listFiles(dir), fs.listFilesDeep(dir)])
   files.value = list
+  deepFiles.value = deep // 保留递归列表，搜索展示子目录命中时用
   const docs = []
-  for (const f of list) {
+  const seen = new Set()
+  // 先去重（deep 已含当前目录本身），统一按 deep 建索引，保证子目录也被搜到
+  for (const f of deep) {
     if (f.kind !== 'note' || f.isNav) continue // 聚合页本身不进检索
     if (f.size > INDEX_MAX) continue
+    if (seen.has(f.path)) continue
+    seen.add(f.path)
     try {
       const c = await fs.readFile(f.path)
       docs.push({ id: f.path, name: f.name, title: getFirstHeading(c) || f.name, body: c })

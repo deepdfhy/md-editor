@@ -4,6 +4,7 @@ export function useFs() {
     openFolder: () => window.md.openFolder(),
     readTree: (dir) => window.md.readTree(dir),
     listFiles: (dir) => window.md.listFiles(dir),
+    listFilesDeep: (dir) => window.md.listFilesDeep(dir),
     scanNotes: (dir, selfPath) => window.md.scanNotes(dir, selfPath),
     readFile: (p) => window.md.readFile(p),
     writeFile: (p, content) => window.md.writeFile(p, content),

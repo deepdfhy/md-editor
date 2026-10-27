@@ -131,6 +131,38 @@ function createScanner(ignore) {
     }
   }
 
+  // 单个文件的信息对象（两处共用：listFiles 单层 / listFilesDeep 递归）
+  async function readOneFile(dir, n, relPath) {
+    const p = path.join(dir, n)
+    let st = null
+    try {
+      st = await fs.promises.stat(p)
+    } catch (_) {
+      return null
+    }
+    return {
+      name: n,
+      path: p,
+      relPath: relPath || n, // 相对「选中目录」的路径（递归遍历时用它标识层级）
+      mtime: st.mtimeMs,
+      size: st.size,
+      ext: extOf(n),
+      kind: kindOf(n),
+      isNav: NAV_RE.test(n)
+    }
+  }
+
+  // 按名称排序（笔记在前，组内按 zh 排序）
+  function sortFiles(files) {
+    files.sort((a, b) => {
+      const an = a.kind === 'note' ? 0 : 1
+      const bn = b.kind === 'note' ? 0 : 1
+      if (an !== bn) return an - bn
+      return a.name.localeCompare(b.name, 'zh')
+    })
+    return files
+  }
+
   // 列出目录下的所有文件（不只是 md）：程序员笔记目录里常放 css/js/图片等附件，
   // 都需要能在第 2 列看到并点开预览。
   async function listFiles(dir) {
@@ -145,31 +177,38 @@ function createScanner(ignore) {
       if (!e.isFile()) continue
       const n = e.name
       if (ignore.isIgnored(n, 'file')) continue
-      const p = path.join(dir, n)
-      let st = null
-      try {
-        st = await fs.promises.stat(p)
-      } catch (_) {
-        continue
-      }
-      files.push({
-        name: n,
-        path: p,
-        mtime: st.mtimeMs,
-        size: st.size,
-        ext: extOf(n),
-        kind: kindOf(n),
-        isNav: NAV_RE.test(n)
-      })
+      const f = await readOneFile(dir, n)
+      if (f) files.push(f)
     }
-    // 笔记排在前面（附件目录里全是图片时也不影响；笔记目录里笔记不会被淹没），组内按名称
-    files.sort((a, b) => {
-      const an = a.kind === 'note' ? 0 : 1
-      const bn = b.kind === 'note' ? 0 : 1
-      if (an !== bn) return an - bn
-      return a.name.localeCompare(b.name, 'zh')
-    })
-    return files
+    return sortFiles(files)
+  }
+
+  // 递归列出目录下所有文件（含所有子目录），每项带 relPath（相对选中目录的路径）。
+  // 用于「选中目录搜索时同时搜所有子目录的文档」；遵守忽略规则并跳过回收站。
+  async function listFilesDeep(dir, base) {
+    const baseDir = base || dir
+    const out = []
+    let entries
+    try {
+      entries = await fs.promises.readdir(dir, { withFileTypes: true })
+    } catch (_) {
+      return out
+    }
+    for (const e of entries) {
+      const n = e.name
+      if (e.isDirectory()) {
+        if (n === RECYCLE_DIR) continue
+        if (ignore.isIgnored(n, 'dir')) continue
+        const sub = await listFilesDeep(path.join(dir, n), baseDir)
+        for (const s of sub) out.push(s)
+      } else if (e.isFile()) {
+        if (ignore.isIgnored(n, 'file')) continue
+        const rel = path.relative(baseDir, path.join(dir, n)).split(path.sep).join('/')
+        const f = await readOneFile(dir, n, rel)
+        if (f) out.push(f)
+      }
+    }
+    return out
   }
 
   // 聚合页用：扫出「本目录的笔记 + 每个直接子目录的笔记」
@@ -271,7 +310,7 @@ function createScanner(ignore) {
     return { dir, uncategorized, categories }
   }
 
-  return { buildTree, getTree, listFiles, scanNotes }
+  return { buildTree, getTree, listFiles, listFilesDeep, scanNotes }
 }
 
 module.exports = {

@@ -143,6 +143,7 @@ onBeforeUnmount(() => window.removeEventListener('click', onWinClick))
         </svg>
 
         <span class="fl-name">{{ f.name }}</span>
+        <span v-if="f.relPath && f.relPath.includes('/')" class="fl-path" :title="f.relPath">{{ f.relPath }}</span>
         <span v-if="isPinned(f)" class="fl-pin" title="已置顶">▲</span>
       </div>
       <div v-if="!items.length" class="fl-empty">当前目录没有可显示的文件</div>

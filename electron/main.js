@@ -61,6 +61,8 @@ ipcMain.handle('readTree', async (_e, dir) => getTree(dir))
 
 // 列出目录下的所有文件（笔记 + 图片/css/js 等附件），带 kind 供前端路由
 ipcMain.handle('listFiles', async (_e, dir) => listFiles(dir))
+// 递归列出目录下所有文件（含所有子目录），带 relPath；用于「选中目录搜索时同时搜所有子目录文档」
+ipcMain.handle('listFilesDeep', async (_e, dir) => scanner.listFilesDeep(dir))
 // 聚合页用：扫出本目录笔记 + 各直接子目录的笔记（含标题与封面图路径）
 ipcMain.handle('scanNotes', async (_e, dir, selfPath) => scanner.scanNotes(dir, { selfPath }))
 ipcMain.handle('readFile', async (_e, p) => fs.promises.readFile(p, 'utf-8'))

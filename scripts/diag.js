@@ -137,6 +137,12 @@ for (let i = 1; i <= 11; i++) {
     ]
   })
 }
+// 递归列表桩：在当前目录文件基础上加一个「子目录里的文档」，验证搜索能展示子目录命中
+ipcMain.handle('listFilesDeep', () => [
+  { name: 'demo.md', path: DEMO, relPath: 'demo.md', mtime: Date.now(), size: DEMO_MD.length, ext: 'md', kind: 'note', isNav: false },
+  { name: 'sub-note.md', path: ROOT + '\\子目录\\sub-note.md', relPath: '子目录/sub-note.md', mtime: Date.now(), size: 120, ext: 'md', kind: 'note', isNav: false },
+  { name: 'app.css', path: ROOT + '\\app.css', relPath: 'app.css', mtime: Date.now(), size: CSS_SRC.length, ext: 'css', kind: 'code', isNav: false }
+])
 ipcMain.handle('scanNotes', () => ({
   dir: ROOT,
   uncategorized: [

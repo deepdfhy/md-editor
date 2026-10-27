@@ -40,12 +40,15 @@ export function createSearch() {
       }
     },
     // 返回 [{ path, name, title }] 或 null（空查询表示不筛选）
+    // 注意：docs 结构是 { id: 路径 }，而 storeFields 只存了 title/name/path —— path 字段
+    // 并未存进文档，所以 r.path 会是 undefined。这里必须用 r.id 作为文件路径（id 就是路径），
+    // 否则 displayItems 按 path 匹配 map 永远不命中，全文命中根本显示不出来。
     search(query) {
       const q = (query || '').trim()
       if (!q) return null
       try {
         const res = ms.search(q)
-        return res.map((r) => ({ path: r.path, name: r.name, title: r.title }))
+        return res.map((r) => ({ path: r.id, name: r.name || '', title: r.title || '' }))
       } catch (_) {
         return null
       }
