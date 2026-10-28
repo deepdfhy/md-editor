@@ -21,6 +21,7 @@ scripts/pw-diag.js
 scripts/pw-order.js
 scripts/pw-scroll-focus.js
 scripts/pw-deep-search.js
+scripts/pw-toc-nav.js
 
 # 编辑器 / 系统
 .vscode/

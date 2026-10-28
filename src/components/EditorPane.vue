@@ -446,6 +446,13 @@ function copyWwCode(item) {
 }
 
 // TOC 跳转：index 用于预览/所见即所得定位第 N 个标题；line 用于代码模式定位行号
+// 关键坑（与搜索滚动同一套，已实证钉死）：
+// - 预览模式：标题在 previewEl（.ep-preview，自身 overflow:auto）里，不在 editorEl。
+//   getHeadings() 去 editorEl.querySelectorAll('h1..h6') 是找不到的 → 点大纲毫无反应。
+// - 所见即所得：Toast UI 渲染两套容器，必须从可见的 .ProseMirror（wwRoot()）里找标题，
+//   用 querySelectorAll 会抓到隐藏的 md 容器标题，滚动位置错乱。
+// 所以按模式取「正确文档里的标题」，再用已验证的 scrollElCenter（wysiwyg→wwRoot 滚，
+// 预览→getScrollAncestors 滚）定位，而不是直接 scrollIntoView。
 async function scrollToHeading({ index = 0, line = 0 } = {}) {
   if (!editor) return
   if (mode.value === 'code') {
@@ -464,36 +471,18 @@ async function scrollToHeading({ index = 0, line = 0 } = {}) {
     }
   }
   await nextTick()
-  const heads = getHeadings()
+  let heads = []
+  if (mode.value === 'wysiwyg') {
+    const root = wwRoot()
+    if (root) heads = Array.from(root.querySelectorAll('h1,h2,h3,h4,h5,h6'))
+  } else {
+    // 预览（含其它兜底）：标题在 previewEl 里
+    const root = previewEl.value
+    if (root) heads = Array.from(root.querySelectorAll('h1,h2,h3,h4,h5,h6'))
+  }
   // 容错：index 越界时取最后一个
-  const target = heads[index] || heads[heads.length - 1]
-  if (target) {
-    try {
-      target.scrollIntoView({ behavior: 'smooth', block: 'start' })
-    } catch (_) {}
-  }
-}
-
-// 收集当前可视区域内的标题元素：
-// - 预览模式：渲染在 previewEl 中
-// - 所见即所得：Toast UI 把内容渲染在内嵌 iframe 里，需到 iframe 文档中查找
-function getHeadings() {
-  if (!editorEl.value) return []
-  let heads = editorEl.value.querySelectorAll('h1,h2,h3,h4,h5,h6')
-  if (heads.length) return heads
-  const iframes = editorEl.value.querySelectorAll('iframe')
-  for (const f of iframes) {
-    try {
-      const d = f.contentDocument || (f.contentWindow && f.contentWindow.document)
-      if (d) {
-        const h = d.querySelectorAll('h1,h2,h3,h4,h5,h6')
-        if (h.length) return h
-      }
-    } catch (_) {
-      /* 跨域 iframe 等异常忽略 */
-    }
-  }
-  return heads
+  const target = heads[index] || heads[heads.length - 1] || null
+  if (target) scrollElCenter(target)
 }
 
 // ---------- 笔记内搜索（搜索按钮 / Ctrl+F） ----------
